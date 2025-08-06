@@ -27,11 +27,16 @@ class BarcodeManager {
             if (window.firebaseAuth && window.firebaseOnAuthStateChanged) {
                 window.firebaseOnAuthStateChanged(window.firebaseAuth, (user) => {
                     if (user) {
+                        console.log('User logged in:', user.email, 'UID:', user.uid);
                         this.currentUser = user;
                         this.hideAuthModal();
                         this.showUserInfo();
-                        this.loadProductsFromFirestore();
+                        // Wait a moment before loading products to ensure everything is ready
+                        setTimeout(() => {
+                            this.loadProductsFromFirestore();
+                        }, 500);
                     } else {
+                        console.log('User logged out');
                         this.currentUser = null;
                         this.showAuthModal();
                         this.hideUserInfo();
@@ -189,13 +194,11 @@ class BarcodeManager {
         try {
             console.log('Loading products for user:', this.currentUser.uid);
             
-            const q = window.firebaseQuery(
-                window.firebaseCollection(window.firebaseDb, 'products'),
-                window.firebaseWhere('userId', '==', this.currentUser.uid),
-                window.firebaseOrderBy('createdAt', 'desc')
-            );
+            // Try to get all products for this user without ordering first
+            const productsRef = window.firebaseCollection(window.firebaseDb, 'products');
+            const userQuery = window.firebaseQuery(productsRef, window.firebaseWhere('userId', '==', this.currentUser.uid));
             
-            const querySnapshot = await window.firebaseGetDocs(q);
+            const querySnapshot = await window.firebaseGetDocs(userQuery);
             this.products = [];
             
             querySnapshot.forEach((doc) => {
@@ -206,6 +209,9 @@ class BarcodeManager {
                     ...productData
                 });
             });
+            
+            // Sort by createdAt in JavaScript instead of Firestore
+            this.products.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
             
             console.log('Total products loaded:', this.products.length);
             this.renderProducts();
@@ -301,6 +307,11 @@ class BarcodeManager {
         // Clear all products
         document.getElementById('clear-all-btn').addEventListener('click', () => {
             this.clearAllProducts();
+        });
+
+        // Refresh products
+        document.getElementById('refresh-products-btn').addEventListener('click', () => {
+            this.refreshProducts();
         });
 
         // Modal controls
@@ -494,6 +505,11 @@ class BarcodeManager {
 
     // Product management
     async addProduct(scannedBarcodeId = null) {
+        if (!this.currentUser) {
+            this.showError('You must be logged in to add products');
+            return;
+        }
+
         const form = document.getElementById('add-product-form');
         const formData = new FormData(form);
         
@@ -515,27 +531,58 @@ class BarcodeManager {
         };
 
         console.log('Adding product:', product);
+        console.log('Current user:', this.currentUser.uid);
 
-        // Save to Firestore
-        const success = await this.saveProductToFirestore(product);
-        
-        if (success) {
-            // Clear the scanned barcode
-            this.scannedBarcodeForAdd = null;
+        try {
+            // Show loading state
+            const submitBtn = form.querySelector('button[type="submit"]');
+            const originalText = submitBtn.textContent;
+            submitBtn.textContent = 'Saving...';
+            submitBtn.disabled = true;
+
+            // Save to Firestore
+            const success = await this.saveProductToFirestore(product);
             
-            // Reload products from Firestore
-            await this.loadProductsFromFirestore();
+            if (success) {
+                // Clear the scanned barcode
+                this.scannedBarcodeForAdd = null;
+                const notice = document.getElementById('scanned-barcode-notice');
+                if (notice) {
+                    notice.style.display = 'none';
+                }
+                
+                // Clear form
+                form.reset();
+                
+                // Wait a moment for Firestore to process
+                setTimeout(async () => {
+                    // Reload products from Firestore
+                    await this.loadProductsFromFirestore();
+                    
+                    this.showSuccess('Product added successfully with barcode ID: ' + barcodeId);
+                    
+                    // Create celebration effect
+                    this.createCelebrationEffect();
+                    
+                    // Switch to products view to see the new product
+                    setTimeout(() => {
+                        this.switchView('product-list');
+                    }, 1500);
+                }, 1000);
+            }
+
+            // Restore button
+            submitBtn.textContent = originalText;
+            submitBtn.disabled = false;
+
+        } catch (error) {
+            console.error('Error in addProduct:', error);
+            this.showError('Failed to add product: ' + error.message);
             
-            form.reset();
-            this.showSuccess('Product added successfully with barcode ID: ' + barcodeId);
-            
-            // Create celebration effect
-            this.createCelebrationEffect();
-            
-            // Switch to products view to see the new product
-            setTimeout(() => {
-                this.switchView('product-list');
-            }, 1500);
+            // Restore button
+            const submitBtn = form.querySelector('button[type="submit"]');
+            submitBtn.textContent = 'Generate Barcode & Add Product';
+            submitBtn.disabled = false;
         }
     }
 
@@ -552,6 +599,28 @@ class BarcodeManager {
             await this.loadProductsFromFirestore();
             this.showSuccess('Product deleted successfully');
         }
+    }
+
+    async refreshProducts() {
+        if (!this.currentUser) {
+            this.showError('Please log in to refresh products');
+            return;
+        }
+        
+        const refreshBtn = document.getElementById('refresh-products-btn');
+        const originalText = refreshBtn.textContent;
+        refreshBtn.textContent = 'Loading...';
+        refreshBtn.disabled = true;
+        
+        try {
+            await this.loadProductsFromFirestore();
+            this.showSuccess('Products refreshed successfully');
+        } catch (error) {
+            this.showError('Failed to refresh products');
+        }
+        
+        refreshBtn.textContent = originalText;
+        refreshBtn.disabled = false;
     }
 
     async clearAllProducts() {

@@ -606,6 +606,11 @@ body.dark-mode .form-group textarea::placeholder {
     margin-bottom: 1.5rem;
 }
 
+.list-actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
 .product-item {
     border: 1px solid rgba(255, 255, 255, 0.2);
     border-radius: 15px;
