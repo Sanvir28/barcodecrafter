@@ -8,6 +8,7 @@ class BarcodeManager {
         this.codeReader = null;
         this.isScanning = false;
         this.darkMode = this.loadThemePreference();
+        this.scannedBarcodeForAdd = null; // Store scanned barcode for adding
         
         this.init();
     }
@@ -86,10 +87,25 @@ class BarcodeManager {
 
     async loginWithGoogle() {
         try {
-            await window.firebaseSignInWithPopup(window.firebaseAuth, window.firebaseGoogleProvider);
+            // Configure Google provider with additional scopes if needed
+            window.firebaseGoogleProvider.setCustomParameters({
+                prompt: 'select_account'
+            });
+            
+            const result = await window.firebaseSignInWithPopup(window.firebaseAuth, window.firebaseGoogleProvider);
+            console.log('Google sign-in successful:', result.user.email);
             this.showSuccess('Login successful!');
         } catch (error) {
-            if (error.code !== 'auth/popup-closed-by-user') {
+            console.error('Google sign-in error:', error);
+            if (error.code === 'auth/popup-blocked') {
+                this.showAuthError('Popup was blocked. Please allow popups and try again.');
+            } else if (error.code === 'auth/popup-closed-by-user') {
+                // User closed popup - don't show error
+                return;
+            } else if (error.code === 'auth/cancelled-popup-request') {
+                // Multiple popup requests - don't show error
+                return;
+            } else {
                 this.showAuthError(this.getAuthErrorMessage(error));
             }
         }
@@ -134,26 +150,45 @@ class BarcodeManager {
 
     // Firestore operations
     async saveProductToFirestore(product) {
-        if (!this.currentUser) return;
+        if (!this.currentUser) {
+            console.error('No user logged in');
+            return false;
+        }
         
         try {
+            console.log('Saving product to Firestore:', product);
+            
             const productData = {
-                ...product,
+                name: product.name,
+                description: product.description || '',
+                barcodeId: product.barcodeId,
                 userId: this.currentUser.uid,
                 createdAt: new Date().toISOString()
             };
             
-            await window.firebaseAddDoc(window.firebaseCollection(window.firebaseDb, 'products'), productData);
+            const docRef = await window.firebaseAddDoc(
+                window.firebaseCollection(window.firebaseDb, 'products'), 
+                productData
+            );
+            
+            console.log('Product saved successfully with ID:', docRef.id);
+            return true;
         } catch (error) {
             console.error('Error saving product to Firestore:', error);
-            this.showError('Failed to save product to cloud. Please try again.');
+            this.showError('Failed to save product to cloud: ' + error.message);
+            return false;
         }
     }
 
     async loadProductsFromFirestore() {
-        if (!this.currentUser) return;
+        if (!this.currentUser) {
+            console.log('No user logged in');
+            return;
+        }
         
         try {
+            console.log('Loading products for user:', this.currentUser.uid);
+            
             const q = window.firebaseQuery(
                 window.firebaseCollection(window.firebaseDb, 'products'),
                 window.firebaseWhere('userId', '==', this.currentUser.uid),
@@ -164,16 +199,25 @@ class BarcodeManager {
             this.products = [];
             
             querySnapshot.forEach((doc) => {
+                const productData = doc.data();
+                console.log('Loaded product:', productData);
                 this.products.push({
                     id: doc.id,
-                    ...doc.data()
+                    ...productData
                 });
             });
             
+            console.log('Total products loaded:', this.products.length);
             this.renderProducts();
         } catch (error) {
             console.error('Error loading products from Firestore:', error);
-            this.showError('Failed to load products from cloud.');
+            
+            // If it's a permissions error, create the index
+            if (error.code === 'failed-precondition') {
+                this.showError('Database index is being created. Please try again in a few minutes.');
+            } else {
+                this.showError('Failed to load products from cloud: ' + error.message);
+            }
         }
     }
 
@@ -236,7 +280,7 @@ class BarcodeManager {
         // Add product form
         document.getElementById('add-product-form').addEventListener('submit', (e) => {
             e.preventDefault();
-            this.addProduct();
+            this.addProduct(this.scannedBarcodeForAdd);
         });
 
         // Manual barcode form
@@ -302,6 +346,15 @@ class BarcodeManager {
 
     // View management
     switchView(viewName) {
+        // Hide scanned barcode notice if switching away from add-product
+        if (viewName !== 'add-product') {
+            this.scannedBarcodeForAdd = null;
+            const notice = document.getElementById('scanned-barcode-notice');
+            if (notice) {
+                notice.style.display = 'none';
+            }
+        }
+
         // Update navigation
         document.querySelectorAll('.nav-btn').forEach(btn => {
             btn.classList.remove('active');
@@ -440,7 +493,7 @@ class BarcodeManager {
     }
 
     // Product management
-    async addProduct() {
+    async addProduct(scannedBarcodeId = null) {
         const form = document.getElementById('add-product-form');
         const formData = new FormData(form);
         
@@ -452,8 +505,8 @@ class BarcodeManager {
             return;
         }
 
-        // Generate unique barcode ID
-        const barcodeId = this.generateBarcodeId();
+        // Use scanned barcode if provided, otherwise generate new one
+        const barcodeId = scannedBarcodeId || this.generateBarcodeId();
         
         const product = {
             name: productName,
@@ -461,22 +514,29 @@ class BarcodeManager {
             barcodeId: barcodeId
         };
 
+        console.log('Adding product:', product);
+
         // Save to Firestore
-        await this.saveProductToFirestore(product);
+        const success = await this.saveProductToFirestore(product);
         
-        // Reload products from Firestore
-        await this.loadProductsFromFirestore();
-        
-        form.reset();
-        this.showSuccess('Product added successfully with barcode ID: ' + barcodeId);
-        
-        // Create celebration effect
-        this.createCelebrationEffect();
-        
-        // Switch to products view to see the new product
-        setTimeout(() => {
-            this.switchView('product-list');
-        }, 1500);
+        if (success) {
+            // Clear the scanned barcode
+            this.scannedBarcodeForAdd = null;
+            
+            // Reload products from Firestore
+            await this.loadProductsFromFirestore();
+            
+            form.reset();
+            this.showSuccess('Product added successfully with barcode ID: ' + barcodeId);
+            
+            // Create celebration effect
+            this.createCelebrationEffect();
+            
+            // Switch to products view to see the new product
+            setTimeout(() => {
+                this.switchView('product-list');
+            }, 1500);
+        }
     }
 
     generateBarcodeId() {
@@ -672,12 +732,41 @@ class BarcodeManager {
                     <h4>Product Not Found</h4>
                     <p><strong>Scanned Barcode:</strong> ${barcodeText}</p>
                     <p>This barcode is not associated with any product in your system.</p>
+                    <div style="margin-top: 1rem;">
+                        <button class="btn btn-primary" onclick="barcodeManager.addProductWithScannedBarcode('${barcodeText}')">
+                            Add This Barcode as New Product
+                        </button>
+                    </div>
                 </div>
             `;
         }
 
         resultsDiv.style.display = 'block';
         resultsDiv.scrollIntoView({ behavior: 'smooth' });
+    }
+
+    addProductWithScannedBarcode(barcodeId) {
+        // Store the scanned barcode for use when adding product
+        this.scannedBarcodeForAdd = barcodeId;
+        
+        // Switch to add product view
+        this.switchView('add-product');
+        
+        // Show the scanned barcode notice
+        const notice = document.getElementById('scanned-barcode-notice');
+        const display = document.getElementById('scanned-barcode-display');
+        if (notice && display) {
+            display.textContent = barcodeId;
+            notice.style.display = 'block';
+        }
+        
+        // Show message about using scanned barcode
+        this.showSuccess(`Switched to Add Product view. The scanned barcode (${barcodeId}) will be used for your new product.`);
+        
+        // Focus on the product name input
+        setTimeout(() => {
+            document.getElementById('product-name').focus();
+        }, 500);
     }
 
     // Product rendering
@@ -803,7 +892,8 @@ class BarcodeManager {
 
     loadThemePreference() {
         const saved = localStorage.getItem('barcode-theme');
-        return saved === 'dark';
+        // Default to dark mode if no preference saved
+        return saved ? saved === 'dark' : true;
     }
 
     saveThemePreference() {
