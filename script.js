@@ -1,7 +1,8 @@
 // Global state management
 class BarcodeManager {
     constructor() {
-        this.products = this.loadProducts();
+        this.products = [];
+        this.currentUser = null;
         this.currentView = 'add-product';
         this.cameraStream = null;
         this.codeReader = null;
@@ -15,11 +16,216 @@ class BarcodeManager {
         this.applyTheme();
         this.setupEventListeners();
         this.setupBarcodeReader();
-        this.renderProducts();
+        this.initializeAuth();
+    }
+
+    // Firebase Authentication
+    initializeAuth() {
+        // Wait for Firebase to load
+        const checkFirebase = () => {
+            if (window.firebaseAuth && window.firebaseOnAuthStateChanged) {
+                window.firebaseOnAuthStateChanged(window.firebaseAuth, (user) => {
+                    if (user) {
+                        this.currentUser = user;
+                        this.hideAuthModal();
+                        this.showUserInfo();
+                        this.loadProductsFromFirestore();
+                    } else {
+                        this.currentUser = null;
+                        this.showAuthModal();
+                        this.hideUserInfo();
+                        this.products = [];
+                        this.renderProducts();
+                    }
+                });
+            } else {
+                setTimeout(checkFirebase, 100);
+            }
+        };
+        checkFirebase();
+    }
+
+    showAuthModal() {
+        document.getElementById('auth-modal').style.display = 'flex';
+        document.querySelector('.container').style.display = 'none';
+    }
+
+    hideAuthModal() {
+        document.getElementById('auth-modal').style.display = 'none';
+        document.querySelector('.container').style.display = 'block';
+    }
+
+    showUserInfo() {
+        const userInfo = document.getElementById('user-info');
+        const userEmail = document.getElementById('user-email');
+        userInfo.style.display = 'flex';
+        userEmail.textContent = this.currentUser.email;
+    }
+
+    hideUserInfo() {
+        document.getElementById('user-info').style.display = 'none';
+    }
+
+    async loginUser(email, password) {
+        try {
+            await window.firebaseSignInWithEmailAndPassword(window.firebaseAuth, email, password);
+            this.showSuccess('Login successful!');
+        } catch (error) {
+            this.showAuthError(this.getAuthErrorMessage(error));
+        }
+    }
+
+    async registerUser(email, password) {
+        try {
+            await window.firebaseCreateUserWithEmailAndPassword(window.firebaseAuth, email, password);
+            this.showSuccess('Account created successfully!');
+        } catch (error) {
+            this.showAuthError(this.getAuthErrorMessage(error));
+        }
+    }
+
+    async loginWithGoogle() {
+        try {
+            await window.firebaseSignInWithPopup(window.firebaseAuth, window.firebaseGoogleProvider);
+            this.showSuccess('Login successful!');
+        } catch (error) {
+            if (error.code !== 'auth/popup-closed-by-user') {
+                this.showAuthError(this.getAuthErrorMessage(error));
+            }
+        }
+    }
+
+    async logout() {
+        try {
+            await window.firebaseSignOut(window.firebaseAuth);
+            this.showSuccess('Logged out successfully!');
+        } catch (error) {
+            this.showError('Error signing out');
+        }
+    }
+
+    getAuthErrorMessage(error) {
+        switch (error.code) {
+            case 'auth/user-not-found':
+                return 'No account found with this email address.';
+            case 'auth/wrong-password':
+                return 'Incorrect password.';
+            case 'auth/email-already-in-use':
+                return 'An account with this email already exists.';
+            case 'auth/weak-password':
+                return 'Password should be at least 6 characters long.';
+            case 'auth/invalid-email':
+                return 'Please enter a valid email address.';
+            case 'auth/too-many-requests':
+                return 'Too many failed attempts. Please try again later.';
+            default:
+                return error.message || 'An error occurred. Please try again.';
+        }
+    }
+
+    showAuthError(message) {
+        const errorDiv = document.getElementById('auth-error');
+        errorDiv.textContent = message;
+        errorDiv.style.display = 'block';
+        setTimeout(() => {
+            errorDiv.style.display = 'none';
+        }, 5000);
+    }
+
+    // Firestore operations
+    async saveProductToFirestore(product) {
+        if (!this.currentUser) return;
+        
+        try {
+            const productData = {
+                ...product,
+                userId: this.currentUser.uid,
+                createdAt: new Date().toISOString()
+            };
+            
+            await window.firebaseAddDoc(window.firebaseCollection(window.firebaseDb, 'products'), productData);
+        } catch (error) {
+            console.error('Error saving product to Firestore:', error);
+            this.showError('Failed to save product to cloud. Please try again.');
+        }
+    }
+
+    async loadProductsFromFirestore() {
+        if (!this.currentUser) return;
+        
+        try {
+            const q = window.firebaseQuery(
+                window.firebaseCollection(window.firebaseDb, 'products'),
+                window.firebaseWhere('userId', '==', this.currentUser.uid),
+                window.firebaseOrderBy('createdAt', 'desc')
+            );
+            
+            const querySnapshot = await window.firebaseGetDocs(q);
+            this.products = [];
+            
+            querySnapshot.forEach((doc) => {
+                this.products.push({
+                    id: doc.id,
+                    ...doc.data()
+                });
+            });
+            
+            this.renderProducts();
+        } catch (error) {
+            console.error('Error loading products from Firestore:', error);
+            this.showError('Failed to load products from cloud.');
+        }
+    }
+
+    async deleteProductFromFirestore(productId) {
+        if (!this.currentUser) return;
+        
+        try {
+            await window.firebaseDeleteDoc(window.firebaseDoc(window.firebaseDb, 'products', productId));
+        } catch (error) {
+            console.error('Error deleting product from Firestore:', error);
+            this.showError('Failed to delete product from cloud.');
+        }
     }
 
     // Event listeners setup
     setupEventListeners() {
+        // Auth event listeners
+        document.querySelectorAll('.auth-tab').forEach(tab => {
+            tab.addEventListener('click', (e) => {
+                this.switchAuthTab(e.target.dataset.tab);
+            });
+        });
+
+        document.getElementById('login-form').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const email = document.getElementById('login-email').value;
+            const password = document.getElementById('login-password').value;
+            this.loginUser(email, password);
+        });
+
+        document.getElementById('register-form').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const email = document.getElementById('register-email').value;
+            const password = document.getElementById('register-password').value;
+            const confirmPassword = document.getElementById('register-confirm-password').value;
+            
+            if (password !== confirmPassword) {
+                this.showAuthError('Passwords do not match.');
+                return;
+            }
+            
+            this.registerUser(email, password);
+        });
+
+        document.getElementById('google-signin-btn').addEventListener('click', () => {
+            this.loginWithGoogle();
+        });
+
+        document.getElementById('logout-btn').addEventListener('click', () => {
+            this.logout();
+        });
+
         // Navigation
         document.querySelectorAll('.nav-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
@@ -77,6 +283,14 @@ class BarcodeManager {
         document.getElementById('theme-toggle').addEventListener('click', () => {
             this.toggleTheme();
         });
+    }
+
+    switchAuthTab(tab) {
+        document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.auth-form').forEach(f => f.classList.remove('active'));
+        
+        document.querySelector(`[data-tab="${tab}"]`).classList.add('active');
+        document.getElementById(`${tab}-form`).classList.add('active');
     }
 
     // Setup barcode reader for scanning
@@ -226,7 +440,7 @@ class BarcodeManager {
     }
 
     // Product management
-    addProduct() {
+    async addProduct() {
         const form = document.getElementById('add-product-form');
         const formData = new FormData(form);
         
@@ -242,16 +456,16 @@ class BarcodeManager {
         const barcodeId = this.generateBarcodeId();
         
         const product = {
-            id: Date.now().toString(),
             name: productName,
             description: productDescription,
-            barcodeId: barcodeId,
-            createdAt: new Date().toISOString()
+            barcodeId: barcodeId
         };
 
-        this.products.push(product);
-        this.saveProducts();
-        this.renderProducts();
+        // Save to Firestore
+        await this.saveProductToFirestore(product);
+        
+        // Reload products from Firestore
+        await this.loadProductsFromFirestore();
         
         form.reset();
         this.showSuccess('Product added successfully with barcode ID: ' + barcodeId);
@@ -272,20 +486,21 @@ class BarcodeManager {
         return timestamp.slice(-9) + random;
     }
 
-    deleteProduct(productId) {
+    async deleteProduct(productId) {
         if (confirm('Are you sure you want to delete this product?')) {
-            this.products = this.products.filter(p => p.id !== productId);
-            this.saveProducts();
-            this.renderProducts();
+            await this.deleteProductFromFirestore(productId);
+            await this.loadProductsFromFirestore();
             this.showSuccess('Product deleted successfully');
         }
     }
 
-    clearAllProducts() {
+    async clearAllProducts() {
         if (confirm('Are you sure you want to delete all products? This action cannot be undone.')) {
-            this.products = [];
-            this.saveProducts();
-            this.renderProducts();
+            // Delete all products from Firestore
+            for (const product of this.products) {
+                await this.deleteProductFromFirestore(product.id);
+            }
+            await this.loadProductsFromFirestore();
             this.showSuccess('All products cleared');
         }
     }
@@ -643,26 +858,6 @@ class BarcodeManager {
 
         // Add sparkles for theme switch
         this.createSparkleEffect();
-    }
-
-    // Local storage management
-    loadProducts() {
-        try {
-            const stored = localStorage.getItem('barcode-products');
-            return stored ? JSON.parse(stored) : [];
-        } catch (error) {
-            console.error('Failed to load products from storage:', error);
-            return [];
-        }
-    }
-
-    saveProducts() {
-        try {
-            localStorage.setItem('barcode-products', JSON.stringify(this.products));
-        } catch (error) {
-            console.error('Failed to save products to storage:', error);
-            this.showError('Failed to save data. Storage may be full.');
-        }
     }
 }
 

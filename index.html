@@ -8,11 +8,115 @@
     <!-- External libraries -->
     <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
     <script src="https://unpkg.com/@zxing/library@latest/umd/index.min.js"></script>
+    
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.0.0/firebase-app.js';
+        import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/12.0.0/firebase-auth.js';
+        import { getFirestore, collection, addDoc, getDocs, doc, deleteDoc, query, where, orderBy } from 'https://www.gstatic.com/firebasejs/12.0.0/firebase-firestore.js';
+        
+        // Your Firebase configuration
+        const firebaseConfig = {
+            apiKey: "AIzaSyDWqZXrPbXmCPM4wniF4I-BvY5X_-OYBcQ",
+            authDomain: "barcodemanager-2a2d8.firebaseapp.com",
+            projectId: "barcodemanager-2a2d8",
+            storageBucket: "barcodemanager-2a2d8.firebasestorage.app",
+            messagingSenderId: "794684407334",
+            appId: "1:794684407334:web:57fe1323231b25fba530e7"
+        };
+        
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const googleProvider = new GoogleAuthProvider();
+        
+        // Make Firebase services available globally
+        window.firebaseAuth = auth;
+        window.firebaseDb = db;
+        window.firebaseSignInWithEmailAndPassword = signInWithEmailAndPassword;
+        window.firebaseCreateUserWithEmailAndPassword = createUserWithEmailAndPassword;
+        window.firebaseSignInWithPopup = signInWithPopup;
+        window.firebaseGoogleProvider = googleProvider;
+        window.firebaseSignOut = signOut;
+        window.firebaseOnAuthStateChanged = onAuthStateChanged;
+        window.firebaseCollection = collection;
+        window.firebaseAddDoc = addDoc;
+        window.firebaseGetDocs = getDocs;
+        window.firebaseDoc = doc;
+        window.firebaseDeleteDoc = deleteDoc;
+        window.firebaseQuery = query;
+        window.firebaseWhere = where;
+        window.firebaseOrderBy = orderBy;
+        
+        console.log('Firebase initialized');
+    </script>
 </head>
 <body>
     <!-- Loading Overlay -->
     <div class="loading-overlay">
         <div class="loading-spinner"></div>
+    </div>
+
+    <!-- Login Modal -->
+    <div id="auth-modal" class="modal auth-modal">
+        <div class="modal-content auth-modal-content">
+            <div class="modal-header">
+                <h3>Welcome to Barcode Manager</h3>
+            </div>
+            <div class="modal-body">
+                <div class="auth-tabs">
+                    <button class="auth-tab active" data-tab="login">Login</button>
+                    <button class="auth-tab" data-tab="register">Register</button>
+                </div>
+                
+                <!-- Login Form -->
+                <form id="login-form" class="auth-form active">
+                    <div class="form-group">
+                        <label for="login-email">Email</label>
+                        <input type="email" id="login-email" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="login-password">Password</label>
+                        <input type="password" id="login-password" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary auth-btn">Login</button>
+                </form>
+                
+                <!-- Register Form -->
+                <form id="register-form" class="auth-form">
+                    <div class="form-group">
+                        <label for="register-email">Email</label>
+                        <input type="email" id="register-email" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="register-password">Password</label>
+                        <input type="password" id="register-password" required minlength="6">
+                    </div>
+                    <div class="form-group">
+                        <label for="register-confirm-password">Confirm Password</label>
+                        <input type="password" id="register-confirm-password" required minlength="6">
+                    </div>
+                    <button type="submit" class="btn btn-primary auth-btn">Register</button>
+                </form>
+                
+                <!-- Google Sign In -->
+                <div class="auth-divider">
+                    <span>or</span>
+                </div>
+                <button id="google-signin-btn" class="btn btn-google">
+                    <svg width="18" height="18" viewBox="0 0 18 18" style="margin-right: 8px;">
+                        <path fill="#4285F4" d="M16.51 8H8.98v3h4.3c-.18 1-.74 1.48-1.6 2.04v2.01h2.6a7.8 7.8 0 002.38-5.88c0-.57-.05-.66-.15-1.18z"/>
+                        <path fill="#34A853" d="M8.98 17c2.16 0 3.97-.72 5.3-1.94l-2.6-2.04a4.8 4.8 0 01-7.18-2.53H1.83v2.07A8 8 0 008.98 17z"/>
+                        <path fill="#FBBC04" d="M4.5 10.49a4.8 4.8 0 010-3.07V5.35H1.83a8 8 0 000 7.28z"/>
+                        <path fill="#EA4335" d="M8.98 4.72c1.16 0 2.23.4 3.06 1.2l2.3-2.3A8 8 0 001.83 5.35L4.5 7.42a4.77 4.77 0 014.48-2.7z"/>
+                    </svg>
+                    Continue with Google
+                </button>
+                
+                <div id="auth-error" class="status-message error" style="display: none;"></div>
+            </div>
+        </div>
     </div>
 
     <!-- Floating Elements -->
@@ -25,9 +129,15 @@
         <header class="header">
             <div class="header-top">
                 <h1>Barcode Manager</h1>
-                <button class="theme-toggle" id="theme-toggle">
-                    <span class="theme-icon">🌙</span>
-                </button>
+                <div class="header-controls">
+                    <div class="user-info" id="user-info" style="display: none;">
+                        <span id="user-email"></span>
+                        <button id="logout-btn" class="btn btn-secondary btn-small">Logout</button>
+                    </div>
+                    <button class="theme-toggle" id="theme-toggle">
+                        <span class="theme-icon">🌙</span>
+                    </button>
+                </div>
             </div>
             <nav class="nav">
                 <button class="nav-btn active" data-view="add-product">Add Product</button>
